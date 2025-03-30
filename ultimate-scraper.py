@@ -1,7 +1,8 @@
 """
+This is based on a script by RichVarney (https://github.com/RichVarney/ultimate-scraper). This version is modified to treat all searches as general queries, to index the options starting at 1 (instead of 0), and to change the filenaming convention for downloaded tabs. The default save location is set to the current working directory.
+
 This script downloads tabs from https://www.ultimate-guitar.com/
-Uses the search functionality to find the tabs, then can choose from a list
-which ones to downloads
+Uses the search functionality to find the tabs, then can choose from a list which ones to downloads
 Works at around 4-5 tabs per second
 
 How to use:
@@ -33,15 +34,15 @@ import requests
 import json
 from bs4 import BeautifulSoup
 from datetime import datetime
+import re
 
 
-save_location = os.getcwd()+'/tabs'
+save_location = '.'
 
 
 def get_search_terms_from_user_input():
-    search_type = input('\n> General search or specific artist/band?\n> Options "general" or "artist": ').lower()
     search_terms = input('\n> Search for: ').split(' ')
-    return search_terms, search_type
+    return search_terms
 
 def search(search_url):
     page = requests.get(search_url)
@@ -50,86 +51,58 @@ def search(search_url):
     json_content = json.loads(results.get('data-content'))
     return json_content
 
-def make_url(search_terms, page_number=1, filter='general', select_band=None, quiet=False):
+def make_url(search_terms, page_number=1, quiet=False):
     search_string = '+'.join(item for item in search_terms)
     search_url = 'https://www.ultimate-guitar.com/search.php?page={}&title={}'.format(page_number, search_string)
-    if filter == 'artist':
-        json_content = search(search_url)
-        list_of_bands = json_content['store']['page']['data']['filters']['bands']
-        if quiet:
-            pass
-        else:
-            for i, j in enumerate(list_of_bands):
-                print('[{}] {}'.format(i, list_of_bands[i]['name']))
-            select_band = input('Select which band by choosing the relevant number:\n')
-        search_url = 'https://www.ultimate-guitar.com{}?page={}'.format(list_of_bands[int(select_band)]['url'], page_number)
-        return search_url, select_band
-    return search_url, select_band
+    return search_url
 
-def filter_json(_json, filtered_json={}, filter=None):
-    # remove irrelevant results from list e.g. ukulele chords or marketing_type
-    if filter == 'artist':
-        tabs_location_in_json = 'other_tabs'
-    else:
-        tabs_location_in_json = 'results'
+def filter_json(_json, filtered_json={}):
+    # remove irrelevant results from list e.g. marketing_type
+    tabs_location_in_json = 'results'
     for i, j in enumerate(_json['store']['page']['data'][tabs_location_in_json]):
         if 'marketing_type' in j:
             pass
         elif j['type'] in ['Ukulele Chords', 'Bass Tabs', 'Pro', 'Power', 'Official', 'Drum Tabs', 'Video']:
             pass
         else:
-            # add new values to a dictionary and auto increment the key
             filtered_json[len(filtered_json)] = j
     return filtered_json
 
 def display_search_results(_json):
     print('')
-    for i, j in enumerate(_json.items()):
+    for i, j in enumerate(_json.items(), start=1):
         print(('[{}] {} - {} ({}) Version {}, rating: {}, votes: {}'.format(i, j[1]['artist_name'], j[1]['song_name'], j[1]['type'], j[1]['version'], j[1]['rating'], j[1]['votes'])))
 
 def compile_list_of_urls(_json):
     selection = input('\n> Pick a tab by entering a number, range or "all": ')
-    # selection = input('\n> Pick from the above:\n> (Can select individual tabs, a range, or "all")\n> Loading...\n')
-
-    if ' ' in selection:  # replace spaces with commas
+    if ' ' in selection: # replace spaces with commas
         selection = selection.replace(' ', ',')
-
-    if ',' in selection:  # list of items
+    if ',' in selection: # list of items
         # trim leading or trailing commas
         selection = selection.rstrip(',').lstrip(',')
         # Split by spaces or commas or both
         selection = selection.replace(',,', ',').split(',')
-        url = [_json[int(i)]['tab_url'] for i in selection]
-
-    elif '-' in selection:  # range of items
+        url = [_json[int(i)-1]['tab_url'] for i in selection]
+    elif '-' in selection: # range of items
         range_selection = selection.split('-')
-        url = [_json[i]['tab_url'] for i in range(int(range_selection[0]), int(range_selection[1])+1)]
-    elif selection.isnumeric():  # single item
-        url = [_json[int(selection)]['tab_url']]
-    elif selection.isalpha():  # all items
+        url = [_json[i-1]['tab_url'] for i in range(int(range_selection[0]), int(range_selection[1])+1)]
+    elif selection.isnumeric():
+        url = [_json[int(selection)-1]['tab_url']]
+    elif selection.isalpha():
         if selection.lower() == 'all':
             url = [i[1]['tab_url'] for i in _json.items()]
     else:
         raise ValueError('{} entered. You must enter either a number, a range of numbers or "all"\
         examples:\n1\n1, 2, 3, 4, 5\n1-5\n3-10\nall'.format(selection))
-
+    
     url = list(set(url))  # remove duplicates
     return url
 
-def get_page_count(_json, filter=None):
-    if filter == 'artist':
-        page_count = _json['store']['page']['data']['pagination']['pages']
-        count = 0
-        for i in page_count:
-            count = i['page']
-        page_count = count
-    else:
-        page_count = _json['store']['page']['data']['pagination']['total']
+def get_page_count(_json):
+    page_count = _json['store']['page']['data']['pagination']['total']
     return page_count
 
 def get_tab_json_data(url):
-    # Get tab
-    # tab_url = 'https://tabs.ultimate-guitar.com/tab/laura-marling/held-down-chords-3028859'
     tab_page = requests.get(url)
     tab_page_soup = BeautifulSoup(tab_page.text, "lxml")
     tab_content = tab_page_soup.find(class_='js-store')
@@ -159,17 +132,17 @@ def get_tab_metadata_from_json(tab_json_content):
 
     return tab_metadata
 
+def clean_filename(filename):
+    filename = re.sub(r'[\\/*?:"<>|]', "", filename)
+    return filename
+
 def save_tab(tab_json_content):
     tab_metadata = get_tab_metadata_from_json(tab_json_content)
-    file_name_format = ['artist_name', 'song_name', 'rating', 'votes', 'type']
-    filename = '-'.join(str(tab_metadata[item]) for item in file_name_format).replace(' ', '_')
+    filename = f"{tab_metadata['artist_name']}_{tab_metadata['song_name']}"
+    filename = clean_filename(filename)
     file_extension = '.txt'
     metadata = ['{}: {}'.format(key, value) for (key, value) in tab_metadata.items()]
-    folder_name = str(tab_metadata['artist_name']).replace(' ', '_')
-    directory = os.path.join(save_location, folder_name)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    filepath = os.path.join(directory, filename+file_extension)
+    filepath = os.path.join(save_location, filename + file_extension)
     if os.path.exists(filepath):
         pass
     else:
@@ -177,23 +150,23 @@ def save_tab(tab_json_content):
             f.write('\n'.join([i for i in metadata]))
             f.write('\n\n')
             try:
-                f.write(tab_json_content['store']['page']['data']['tab_view']['wiki_tab']['content'].replace('[tab]','').replace('[/tab]','').replace('[ch]','').replace('[/ch]',''))
+                f.write(tab_json_content['store']['page']['data']['tab_view']['wiki_tab']['content'].replace('[tab]', '').replace('[/tab]', '').replace('[ch]', '').replace('[/ch]', ''))
             except Exception as e:
                 print('Exception {} for {}'.format(e, filename))
                 if e == 'content':
                     print('No tab content available')
-    return folder_name
+    return None
 
 def main():
-    search_terms, search_type = get_search_terms_from_user_input()
-    url, select_band = make_url(search_terms, filter=search_type)
+    search_terms = get_search_terms_from_user_input()
+    url = make_url(search_terms)
     json_content = search(url)
-    total_page_count = get_page_count(json_content, filter=search_type)
+    total_page_count = get_page_count(json_content)
     for i in range(total_page_count):
         try:
-            url = make_url(search_terms, page_number=i+1, filter=search_type, select_band=select_band, quiet=True)
-            json_content = search(url[0])
-            filtered_json_search_results = filter_json(json_content, filter=search_type)
+            url = make_url(search_terms, page_number=i+1, quiet=True)
+            json_content = search(url)
+            filtered_json_search_results = filter_json(json_content)
         except AttributeError as ae:
             print('Skipping album tabs...')
         except Exception as e:
